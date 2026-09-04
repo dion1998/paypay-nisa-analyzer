@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -16,23 +15,20 @@ import (
 )
 
 func main() {
-	dataDir := getenv("NISA_DATA_DIR", "data")
-	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		log.Fatal(err)
-	}
-	db, err := store.Open(filepath.Join(dataDir, "nisa-analyzer.db"))
+	startupCtx, cancelStartup := context.WithTimeout(context.Background(), 15*time.Second)
+	db, err := store.OpenPostgres(startupCtx, os.Getenv("DATABASE_URL"))
+	cancelStartup()
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer db.Close()
 
-	// PublicSource only requests public, unauthenticated PayPay pages. Historical
-	// providers are deliberately separate because each investment manager publishes
-	// adjusted NAV data in a different format and under its own terms.
+	// 僅讀取 PayPay 不需登入的公開頁面。各投信公司的還原淨值格式與使用條款
+	// 不同，因此歷史資料來源刻意分開處理。
 	server := app.New(db, sources.NewPayPayPublicSource(http.DefaultClient), log.Default())
 	httpServer := &http.Server{Addr: ":" + getenv("PORT", "8080"), Handler: server.Routes(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
-		log.Printf("PayPay NISA 分析器已啟動：http://localhost%s", httpServer.Addr)
+		log.Printf("PayPay NISA API 已啟動：http://localhost%s", httpServer.Addr)
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
