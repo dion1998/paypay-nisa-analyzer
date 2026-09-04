@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title><link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<main class="shell">
+  <header class="topbar">
+    <a class="wordmark" href="/" aria-label="PayPay NISA 投信分析器首頁"><span class="wordmark-mark">N</span><span>PAYPAY <b>NISA</b></span><small>RESEARCH</small></a>
+    <nav class="topnav" aria-label="主要導覽"><a class="active" href="#analysis">分析中心</a><a href="#method">方法說明</a><a href="#context">官方資料</a></nav>
+    <div class="top-actions"><span class="local-status"><i></i>本機研究模式</span><button id="refresh" class="ghost" type="button">更新公開資料</button></div>
+  </header>
+  <section class="page-heading"><div><p class="eyebrow">INVESTMENT TRUST RESEARCH</p><h1>投資信託分析中心</h1><p>以可驗證的歷史資料，檢視 NISA 長期投入的可能範圍。</p></div><div class="disclaimer-pill">歷史資料推估 · 非投資建議</div></section>
+  <section class="notice"><span aria-hidden="true">◆</span> 歷史績效不代表未來結果。本工具不構成投資、稅務或買賣建議。</section>
+  <div class="layout" id="analysis">
+    <section class="panel input-panel" aria-labelledby="input-title">
+      <div class="panel-heading"><div><p class="section-kicker">01 · INVESTMENT PLAN</p><h2 id="input-title">設定投入條件</h2></div><span class="step-badge">STEP 1</span></div>
+      <form id="analysis-form">
+        <label for="fund-query">目標投資信託</label>
+        <div class="fund-combobox"><input id="fund-query" role="combobox" aria-expanded="false" aria-controls="fund-list" aria-autocomplete="list" autocomplete="off" placeholder="輸入基金名稱，例如 eMAXIS Slim" required><span aria-hidden="true">⌕</span></div>
+        <div id="fund-list" class="search-results" role="listbox" aria-live="polite"></div><input id="fund-id" type="hidden" required>
+        <p class="field-hint">鍵入名稱後，會顯示 PayPay 公開清單中符合的投資信託。</p>
+        <div class="form-grid"><label for="initial">初始本金（日圓）<input id="initial" type="number" min="0" step="1" inputmode="numeric" value="100000" required></label><label for="monthly">每月投入（日圓）<input id="monthly" type="number" min="0" step="1" inputmode="numeric" value="30000" required></label></div>
+        <button class="primary" type="submit"><span>分析 5 年歷史情境</span><b aria-hidden="true">→</b></button>
+      </form>
+      <div class="input-summary"><span>投入時間</span><b>本金即時投入 · 每月底定投</b></div>
+    </section>
+    <section class="panel forecast-panel" aria-labelledby="forecast-title">
+      <div class="panel-heading"><div><p class="section-kicker">02 · HISTORICAL OUTLOOK</p><h2 id="forecast-title">5 年後歷史情境</h2></div><span id="data-status" class="data-status">等待資料</span></div>
+      <div id="empty-state" class="empty"><div class="empty-icon">⌁</div><strong>選擇基金並開始分析</strong><small>資料不足 60 個月時，系統不會產生推估數字。</small></div>
+      <div id="result" hidden aria-live="polite">
+        <div class="selected-fund"><span>分析標的</span><strong id="result-fund-name">—</strong></div>
+        <div class="primary-result"><div><p class="result-label">歷史中位情境 · P50</p><p id="p50" class="headline-number">—</p><p id="contributions" class="muted">—</p></div><div class="probability-key"><span><i class="dot risk"></i>保守 P10</span><span><i class="dot base"></i>中位 P50</span><span><i class="dot positive"></i>樂觀 P90</span></div></div>
+        <div class="range" aria-label="歷史情境範圍"><div class="range-line"></div><div class="range-point low"><span>P10</span><b id="p10">—</b></div><div class="range-point median"><span>P50</span><b id="p50-small">—</b></div><div class="range-point high"><span>P90</span><b id="p90">—</b></div></div>
+        <div class="analysis-tabs" role="tablist" aria-label="結果內容"><button class="tab active" type="button" role="tab" aria-selected="true" aria-controls="scenario-view" data-view="scenario-view">情境表格</button><button class="tab" type="button" role="tab" aria-selected="false" aria-controls="metrics-view" data-view="metrics-view">關鍵指標</button></div>
+        <div id="scenario-view" class="view-panel" role="tabpanel"><table class="scenario-table"><thead><tr><th>歷史情境</th><th>5 年後估計金額</th><th>相對投入總額</th></tr></thead><tbody><tr class="downside"><td><span class="signal">↓</span>保守 · P10</td><td id="table-p10">—</td><td id="return-p10">—</td></tr><tr class="baseline"><td><span class="signal">◆</span>中位 · P50</td><td id="table-p50">—</td><td id="return-p50">—</td></tr><tr class="upside"><td><span class="signal">↑</span>樂觀 · P90</td><td id="table-p90">—</td><td id="return-p90">—</td></tr></tbody></table></div>
+        <div id="metrics-view" class="view-panel" role="tabpanel" hidden><table class="metric-table"><tbody><tr><th>建議最短持有年限</th><td id="holding">—</td><td>正報酬機率門檻 80%</td></tr><tr><th>最大歷史跌幅</th><td id="drawdown">—</td><td>以月末調整後淨值計算</td></tr><tr><th>情境樣本數</th><td id="samples">—</td><td>每組為連續 60 個月</td></tr></tbody></table></div>
+        <p id="methodology" class="fineprint"></p>
+      </div>
+    </section>
+    <aside class="panel context-panel" id="context" aria-labelledby="context-title"><div class="panel-heading"><div><p class="section-kicker">03 · DUE DILIGENCE</p><h2 id="context-title">基金資料與風險</h2></div></div><div id="fund-meta" class="context-empty">尚未選擇基金</div><hr><h3>NISA 資格提示</h3><p id="nisa-note" class="muted">選擇基金後顯示適用資格與投入提醒。</p><hr><h3>近期官方觀點</h3><div id="insights" class="muted">基金分析後，這裡會顯示已驗證的發行商／官方資料。</div></aside>
+  </div>
+  <section class="method-note" id="method"><span>方法透明</span><p>預估只使用分配金再投資後的歷史淨值；近期官方資料僅作背景解讀，絕不改寫金額推估。</p></section>
+</main><script src="/static/app.js"></script>
+</body></html>
