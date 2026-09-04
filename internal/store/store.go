@@ -13,8 +13,10 @@ import (
 
 type Store struct{ db *sql.DB }
 
+var openSQLite = sql.Open
+
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
+	db, err := openSQLite("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, err
 	}
@@ -56,17 +58,12 @@ func (s *Store) UpsertFunds(funds []domain.Fund) error {
 		return err
 	}
 	defer tx.Rollback()
-	stmt, err := tx.Prepare(`INSERT INTO funds(id,name,manager,nisa_tsumitate,nisa_growth,paypay_url,history_url,refreshed_at)
-VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,manager=excluded.manager,nisa_tsumitate=excluded.nisa_tsumitate,nisa_growth=excluded.nisa_growth,paypay_url=excluded.paypay_url,history_url=excluded.history_url,refreshed_at=excluded.refreshed_at`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
 	for _, f := range funds {
 		if f.ID == "" || f.Name == "" {
 			return errors.New("基金資料缺少 ID 或名稱")
 		}
-		if _, err := stmt.Exec(f.ID, f.Name, f.Manager, boolInt(f.NISATsumitate), boolInt(f.NISAGrowth), f.PayPayURL, f.HistoryURL, f.RefreshedAt.UTC().Format(time.RFC3339)); err != nil {
+		if _, err := tx.Exec(`INSERT INTO funds(id,name,manager,nisa_tsumitate,nisa_growth,paypay_url,history_url,refreshed_at)
+VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,manager=excluded.manager,nisa_tsumitate=excluded.nisa_tsumitate,nisa_growth=excluded.nisa_growth,paypay_url=excluded.paypay_url,history_url=excluded.history_url,refreshed_at=excluded.refreshed_at`, f.ID, f.Name, f.Manager, boolInt(f.NISATsumitate), boolInt(f.NISAGrowth), f.PayPayURL, f.HistoryURL, f.RefreshedAt.UTC().Format(time.RFC3339)); err != nil {
 			return err
 		}
 	}
@@ -122,16 +119,11 @@ func (s *Store) ReplacePrices(fundID string, points []domain.PricePoint) error {
 	if _, err = tx.Exec(`DELETE FROM prices WHERE fund_id=?`, fundID); err != nil {
 		return err
 	}
-	stmt, err := tx.Prepare(`INSERT INTO prices(fund_id,date,nav,source_url) VALUES(?,?,?,?)`)
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
 	for _, p := range points {
 		if p.NAV <= 0 || p.Date.IsZero() {
 			return errors.New("歷史淨值無效")
 		}
-		if _, err = stmt.Exec(fundID, p.Date.UTC().Format("2006-01-02"), p.NAV, p.SourceURL); err != nil {
+		if _, err = tx.Exec(`INSERT INTO prices(fund_id,date,nav,source_url) VALUES(?,?,?,?)`, fundID, p.Date.UTC().Format("2006-01-02"), p.NAV, p.SourceURL); err != nil {
 			return err
 		}
 	}

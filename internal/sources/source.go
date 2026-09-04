@@ -21,14 +21,17 @@ type FundCatalogSource interface {
 // PayPayPublicSource fetches only PayPay's public catalogue JSON. It deliberately
 // does not use a logged-in browser session or private API. If the public schema
 // changes, Refresh returns an error and cached data stays intact.
-type PayPayPublicSource struct{ client *http.Client }
+type PayPayPublicSource struct {
+	client   *http.Client
+	endpoint string
+}
 
 func NewPayPayPublicSource(client *http.Client) *PayPayPublicSource {
-	return &PayPayPublicSource{client: client}
+	return &PayPayPublicSource{client: client, endpoint: PayPayFundDataURL}
 }
 
 func (s *PayPayPublicSource) FetchFunds(ctx context.Context) ([]domain.Fund, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, PayPayFundDataURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
