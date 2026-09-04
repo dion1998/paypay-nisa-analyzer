@@ -80,6 +80,12 @@ func percentile(values []float64, p float64) float64 {
 	if len(values) == 0 {
 		return 0
 	}
+	if p <= 0 {
+		return values[0]
+	}
+	if p >= 1 {
+		return values[len(values)-1]
+	}
 	position := p * float64(len(values)-1)
 	low, high := int(math.Floor(position)), int(math.Ceil(position))
 	if low == high {

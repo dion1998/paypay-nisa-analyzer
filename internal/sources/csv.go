@@ -16,6 +16,7 @@ import (
 // reinvested pre-tax distributions. Plain NAV must not be imported as a proxy.
 func ParseAdjustedNAVCSV(r io.Reader, fundID, sourceURL string) ([]domain.PricePoint, error) {
 	reader := csv.NewReader(r)
+	reader.FieldsPerRecord = -1
 	headers, err := reader.Read()
 	if err != nil {
 		return nil, fmt.Errorf("讀取 CSV 標頭：%w", err)
@@ -43,7 +44,7 @@ func ParseAdjustedNAVCSV(r io.Reader, fundID, sourceURL string) ([]domain.PriceP
 		if err != nil {
 			return nil, fmt.Errorf("CSV 第 %d 行：%w", line, err)
 		}
-		if len(record) != len(headers) || len(record) <= max(dateColumn, navColumn) {
+		if len(record) != len(headers) {
 			return nil, fmt.Errorf("CSV 第 %d 行欄位數不正確；含逗號的數值必須加上雙引號", line)
 		}
 		date, err := time.Parse("2006-01-02", strings.TrimSpace(record[dateColumn]))
