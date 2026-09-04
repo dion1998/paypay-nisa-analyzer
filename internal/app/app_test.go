@@ -35,7 +35,7 @@ func newTestApp(t *testing.T, catalog stubCatalog) (*App, *store.Store, string) 
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	return New(db, catalog, log.New(io.Discard, "", 0)), db, path
+	return newApp(db, catalog, log.New(io.Discard, "", 0)), db, path
 }
 
 func TestAnalysisAPI(t *testing.T) {
@@ -174,7 +174,7 @@ func TestInsightsAndRefreshRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app := New(db, stubCatalog{funds: []domain.Fund{fund}}, log.New(io.Discard, "", 0))
+	app := newApp(db, stubCatalog{funds: []domain.Fund{fund}}, log.New(io.Discard, "", 0))
 	_, err = seed.Exec(`INSERT INTO insights(fund_id,publisher,title,summary,source_url,published_at) VALUES(?,?,?,?,?,?)`, fund.ID, "Issuer", "Old", "context", "https://example.test", time.Now().Add(-91*24*time.Hour).UTC().Format(time.RFC3339))
 	_ = seed.Close()
 	if err != nil {
@@ -229,6 +229,7 @@ func TestRefreshErrorPathsAndHelpers(t *testing.T) {
 	if _, err := app.refreshCatalog(context.Background()); err == nil {
 		t.Fatal("expected catalogue error")
 	}
+	app.refreshIfStale()
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -241,5 +242,31 @@ func TestRefreshErrorPathsAndHelpers(t *testing.T) {
 	var target map[string]any
 	if err := decodeJSON(httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"ok":true}`)), &target); err != nil || target["ok"] != true {
 		t.Fatalf("decode = %#v, %v", target, err)
+	}
+}
+
+func TestRefreshCatalogStoreErrorAndNew(t *testing.T) {
+	app, db, _ := newTestApp(t, stubCatalog{funds: []domain.Fund{{ID: "fund", Name: "Fund", RefreshedAt: time.Now()}}})
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := app.refreshCatalog(context.Background()); err == nil {
+		t.Fatal("expected store error")
+	}
+
+	// New starts the production background refresh; use a fresh timestamp so it
+	// returns before accessing the catalogue.
+	path := filepath.Join(t.TempDir(), "new.db")
+	fresh, err := store.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fresh.Close()
+	if err := fresh.UpsertFunds([]domain.Fund{{ID: "fresh", Name: "Fresh", RefreshedAt: time.Now().UTC()}}); err != nil {
+		t.Fatal(err)
+	}
+	newApp(fresh, stubCatalog{}, log.New(io.Discard, "", 0)).refreshIfStale()
+	if got := New(fresh, stubCatalog{}, log.New(io.Discard, "", 0)); got == nil {
+		t.Fatal("expected app")
 	}
 }
