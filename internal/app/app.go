@@ -30,10 +30,14 @@ type App struct {
 }
 
 func New(data *store.Store, catalog sources.FundCatalogSource, logger *log.Logger) *App {
-	tpl := template.Must(template.ParseFS(assets, "templates/index.html"))
-	a := &App{store: data, catalog: catalog, logger: logger, tpl: tpl}
+	a := newApp(data, catalog, logger)
 	go a.refreshIfStale()
 	return a
+}
+
+func newApp(data *store.Store, catalog sources.FundCatalogSource, logger *log.Logger) *App {
+	tpl := template.Must(template.ParseFS(assets, "templates/index.html"))
+	return &App{store: data, catalog: catalog, logger: logger, tpl: tpl}
 }
 
 func (a *App) Routes() http.Handler {
