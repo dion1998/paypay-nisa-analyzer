@@ -1,0 +1,19 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env}
+      PORT: "8080"
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: web
+    ports:
+      - "${NISA_APP_PORT:-8080}:80"
+    depends_on:
+      - api

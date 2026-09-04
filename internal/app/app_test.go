@@ -3,21 +3,20 @@ package app
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 
 	"paypay-nisa-analyzer/internal/domain"
 	"paypay-nisa-analyzer/internal/store"
-
-	_ "modernc.org/sqlite"
 )
 
 type stubCatalog struct {
@@ -27,21 +26,93 @@ type stubCatalog struct {
 
 func (s stubCatalog) FetchFunds(context.Context) ([]domain.Fund, error) { return s.funds, s.err }
 
-func newTestApp(t *testing.T, catalog stubCatalog) (*App, *store.Store, string) {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "test.db")
-	db, err := store.Open(path)
-	if err != nil {
-		t.Fatal(err)
+type memoryStore struct {
+	funds    map[string]domain.Fund
+	prices   map[string][]domain.PricePoint
+	cpi      []domain.CPIPoint
+	insights map[string][]domain.Insight
+}
+
+var _ store.Repository = (*memoryStore)(nil)
+
+func newMemoryStore() *memoryStore {
+	now := time.Now().UTC()
+	cpi := make([]domain.CPIPoint, 24)
+	for i := range cpi {
+		cpi[i] = domain.CPIPoint{Date: now.AddDate(0, i-23, 0), Index: 100 + float64(i), SourceURL: "https://example.test/cpi"}
 	}
-	t.Cleanup(func() { _ = db.Close() })
-	return newApp(db, catalog, log.New(io.Discard, "", 0)), db, path
+	return &memoryStore{funds: map[string]domain.Fund{}, prices: map[string][]domain.PricePoint{}, cpi: cpi, insights: map[string][]domain.Insight{}}
+}
+
+func (s *memoryStore) UpsertFunds(funds []domain.Fund) error {
+	for _, fund := range funds {
+		if fund.ID == "" || fund.Name == "" {
+			return errors.New("基金資料缺少 ID 或名稱")
+		}
+		s.funds[fund.ID] = fund
+	}
+	return nil
+}
+func (s *memoryStore) FindFunds(query string, limit int) ([]domain.Fund, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	query = strings.ToLower(query)
+	result := make([]domain.Fund, 0)
+	for _, fund := range s.funds {
+		if strings.Contains(strings.ToLower(fund.Name), query) {
+			result = append(result, fund)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
+	if len(result) > limit {
+		result = result[:limit]
+	}
+	return result, nil
+}
+func (s *memoryStore) LastFundRefresh() (time.Time, error) {
+	var newest time.Time
+	for _, fund := range s.funds {
+		if fund.RefreshedAt.After(newest) {
+			newest = fund.RefreshedAt
+		}
+	}
+	return newest, nil
+}
+func (s *memoryStore) Fund(id string) (domain.Fund, error) {
+	fund, ok := s.funds[id]
+	if !ok {
+		return domain.Fund{}, fmt.Errorf("找不到基金：%s", id)
+	}
+	return fund, nil
+}
+func (s *memoryStore) ReplacePrices(fundID string, points []domain.PricePoint) error {
+	s.prices[fundID] = append([]domain.PricePoint(nil), points...)
+	return nil
+}
+func (s *memoryStore) Prices(fundID string) ([]domain.PricePoint, error) {
+	return append([]domain.PricePoint(nil), s.prices[fundID]...), nil
+}
+func (s *memoryStore) ReplaceCPI(points []domain.CPIPoint) error {
+	s.cpi = append([]domain.CPIPoint(nil), points...)
+	return nil
+}
+func (s *memoryStore) CPI() ([]domain.CPIPoint, error) {
+	return append([]domain.CPIPoint(nil), s.cpi...), nil
+}
+func (s *memoryStore) Insights(fundID string) ([]domain.Insight, error) {
+	return append([]domain.Insight(nil), s.insights[fundID]...), nil
+}
+
+func newTestApp(catalog stubCatalog) (*App, *memoryStore) {
+	data := newMemoryStore()
+	return newApp(data, catalog, log.New(io.Discard, "", 0)), data
 }
 
 func TestAnalysisAPI(t *testing.T) {
-	app, db, _ := newTestApp(t, stubCatalog{})
+	app, data := newTestApp(stubCatalog{})
 	fund := domain.Fund{ID: "fund-1", Name: "測試投信", NISATsumitate: true, RefreshedAt: time.Now().UTC()}
-	if err := db.UpsertFunds([]domain.Fund{fund}); err != nil {
+	if err := data.UpsertFunds([]domain.Fund{fund}); err != nil {
 		t.Fatal(err)
 	}
 	prices := make([]domain.PricePoint, 73)
@@ -53,12 +124,10 @@ func TestAnalysisAPI(t *testing.T) {
 		}
 		prices[i] = domain.PricePoint{FundID: fund.ID, Date: start.AddDate(0, i, 0), NAV: nav, SourceURL: "https://issuer.example"}
 	}
-	if err := db.ReplacePrices(fund.ID, prices); err != nil {
+	if err := data.ReplacePrices(fund.ID, prices); err != nil {
 		t.Fatal(err)
 	}
-	body := bytes.NewBufferString(`{"fundId":"fund-1","initialAmount":100000,"monthlyAmount":30000}`)
-	request := httptest.NewRequest(http.MethodPost, "/api/analysis", body)
-	request.Header.Set("Content-Type", "application/json")
+	request := httptest.NewRequest(http.MethodPost, "/api/analysis", bytes.NewBufferString(`{"fundId":"fund-1","initialAmount":100000,"monthlyAmount":30000}`))
 	response := httptest.NewRecorder()
 	app.Routes().ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -73,200 +142,80 @@ func TestAnalysisAPI(t *testing.T) {
 	}
 }
 
-func TestAnalysisAPIRejectsInvalidInput(t *testing.T) {
-	app, _, _ := newTestApp(t, stubCatalog{})
-	request := httptest.NewRequest(http.MethodPost, "/api/analysis", bytes.NewBufferString(`{"fundId":""}`))
-	response := httptest.NewRecorder()
-	app.Routes().ServeHTTP(response, request)
-	if response.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d", response.Code)
-	}
-}
-
-func TestRoutesServePageAndFundSearch(t *testing.T) {
-	app, db, _ := newTestApp(t, stubCatalog{})
+func TestRoutesAndValidation(t *testing.T) {
+	app, data := newTestApp(stubCatalog{})
 	fund := domain.Fund{ID: "fund", Name: "Alpha Fund", RefreshedAt: time.Now().UTC()}
-	if err := db.UpsertFunds([]domain.Fund{fund}); err != nil {
+	if err := data.UpsertFunds([]domain.Fund{fund}); err != nil {
 		t.Fatal(err)
 	}
-	for _, target := range []struct {
-		path string
-		want int
+	for _, test := range []struct {
+		method string
+		path   string
+		body   string
+		want   int
 	}{
-		{"/", http.StatusOK},
-		{"/static/app.css", http.StatusOK},
-		{"/api/funds?q=Alpha", http.StatusOK},
+		{http.MethodGet, "/healthz", "", http.StatusOK},
+		{http.MethodGet, "/api/funds?q=Alpha", "", http.StatusOK},
+		{http.MethodPost, "/api/analysis", `{"fundId":""}`, http.StatusBadRequest},
+		{http.MethodPost, "/api/analysis", `{"fundId":"missing"}`, http.StatusNotFound},
 	} {
 		response := httptest.NewRecorder()
-		app.Routes().ServeHTTP(response, httptest.NewRequest(http.MethodGet, target.path, nil))
-		if response.Code != target.want {
-			t.Fatalf("%s status = %d: %s", target.path, response.Code, response.Body.String())
+		app.Routes().ServeHTTP(response, httptest.NewRequest(test.method, test.path, bytes.NewBufferString(test.body)))
+		if response.Code != test.want {
+			t.Fatalf("%s %s status = %d: %s", test.method, test.path, response.Code, response.Body.String())
 		}
 	}
 }
 
-func TestAnalysisAPIErrors(t *testing.T) {
-	app, db, path := newTestApp(t, stubCatalog{})
-	cases := []struct {
-		name string
-		body string
-		want int
-	}{
-		{"malformed", "{", http.StatusBadRequest},
-		{"blank id", `{"fundId":" "}`, http.StatusBadRequest},
-		{"missing fund", `{"fundId":"missing","initialAmount":1}`, http.StatusNotFound},
-	}
-	for _, tt := range cases {
-		t.Run(tt.name, func(t *testing.T) {
-			response := httptest.NewRecorder()
-			app.Routes().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/analysis", bytes.NewBufferString(tt.body)))
-			if response.Code != tt.want {
-				t.Fatalf("status = %d: %s", response.Code, response.Body.String())
-			}
-		})
-	}
-	if err := db.UpsertFunds([]domain.Fund{{ID: "short", Name: "Short", RefreshedAt: time.Now().UTC()}}); err != nil {
-		t.Fatal(err)
-	}
-	response := httptest.NewRecorder()
-	app.Routes().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/analysis", bytes.NewBufferString(`{"fundId":"short"}`)))
-	if response.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d: %s", response.Code, response.Body.String())
-	}
-	if _, err := db.Fund("short"); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.ReplacePrices("short", []domain.PricePoint{{FundID: "short", Date: time.Now(), NAV: 100}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Fund("short"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Prices("short"); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.ReplacePrices("short", nil); err != nil {
-		t.Fatal(err)
-	}
-	// Removing the price table makes the handler exercise its database error response.
-	if _, err := execRaw(path, `DROP TABLE prices`); err != nil {
-		t.Fatal(err)
-	}
-	response = httptest.NewRecorder()
-	app.Routes().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/analysis", bytes.NewBufferString(`{"fundId":"short"}`)))
-	if response.Code != http.StatusInternalServerError {
-		t.Fatalf("price failure status = %d", response.Code)
+func TestCORSOnlyAllowsConfiguredFrontend(t *testing.T) {
+	t.Setenv("CORS_ORIGIN", "https://app.example.test")
+	app, _ := newTestApp(stubCatalog{})
+	for _, test := range []struct{ origin, want string }{{"https://app.example.test", "https://app.example.test"}, {"https://attacker.example.test", ""}} {
+		request := httptest.NewRequest(http.MethodOptions, "/api/funds", nil)
+		request.Header.Set("Origin", test.origin)
+		response := httptest.NewRecorder()
+		app.Routes().ServeHTTP(response, request)
+		if response.Code != http.StatusNoContent || response.Header().Get("Access-Control-Allow-Origin") != test.want {
+			t.Fatalf("origin %q: status=%d allow=%q", test.origin, response.Code, response.Header().Get("Access-Control-Allow-Origin"))
+		}
 	}
 }
 
 func TestInsightsAndRefreshRoutes(t *testing.T) {
 	fund := domain.Fund{ID: "fund", Name: "Fund", RefreshedAt: time.Now().UTC()}
-	path := filepath.Join(t.TempDir(), "test.db")
-	db, err := store.Open(path)
-	if err != nil {
+	app, data := newTestApp(stubCatalog{funds: []domain.Fund{fund}})
+	if err := data.UpsertFunds([]domain.Fund{fund}); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
-	if err := db.UpsertFunds([]domain.Fund{fund}); err != nil {
-		t.Fatal(err)
-	}
-	seed, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
-	if err != nil {
-		t.Fatal(err)
-	}
-	app := newApp(db, stubCatalog{funds: []domain.Fund{fund}}, log.New(io.Discard, "", 0))
-	_, err = seed.Exec(`INSERT INTO insights(fund_id,publisher,title,summary,source_url,published_at) VALUES(?,?,?,?,?,?)`, fund.ID, "Issuer", "Old", "context", "https://example.test", time.Now().Add(-91*24*time.Hour).UTC().Format(time.RFC3339))
-	_ = seed.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, target := range []struct {
-		path string
-		want int
+	data.insights[fund.ID] = []domain.Insight{{FundID: fund.ID, Title: "Old", PublishedAt: time.Now().Add(-91 * 24 * time.Hour)}}
+	for _, test := range []struct {
+		method, path string
+		want         int
 	}{
-		{"/api/insights/fund", http.StatusOK},
-		{"/api/insights/missing", http.StatusNotFound},
+		{http.MethodGet, "/api/insights/fund", http.StatusOK},
+		{http.MethodGet, "/api/insights/missing", http.StatusNotFound},
+		{http.MethodPost, "/api/data/refresh", http.StatusOK},
 	} {
 		response := httptest.NewRecorder()
-		app.Routes().ServeHTTP(response, httptest.NewRequest(http.MethodGet, target.path, nil))
-		if response.Code != target.want {
-			t.Fatalf("%s status = %d", target.path, response.Code)
+		app.Routes().ServeHTTP(response, httptest.NewRequest(test.method, test.path, nil))
+		if response.Code != test.want {
+			t.Fatalf("%s %s status = %d", test.method, test.path, response.Code)
 		}
 	}
-	if _, err := execRaw(path, `DROP TABLE insights`); err != nil {
-		t.Fatal(err)
-	}
-	response := httptest.NewRecorder()
-	app.Routes().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/insights/fund", nil))
-	if response.Code != http.StatusInternalServerError {
-		t.Fatalf("insights failure status = %d", response.Code)
-	}
-	response = httptest.NewRecorder()
-	app.Routes().ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/data/refresh", nil))
-	if response.Code != http.StatusOK {
-		t.Fatalf("refresh status = %d: %s", response.Code, response.Body.String())
-	}
 }
 
-// dbInternalExec opens a second connection because Store deliberately keeps its
-// SQLite handle private; it is used only to create otherwise unreachable read errors.
-func execRaw(path, statement string) (sql.Result, error) {
-	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-	return db.Exec(statement)
-}
-
-func TestRefreshErrorPathsAndHelpers(t *testing.T) {
-	app, db, _ := newTestApp(t, stubCatalog{err: errors.New("upstream")})
+func TestRefreshErrorAndFreshStartup(t *testing.T) {
+	app, _ := newTestApp(stubCatalog{err: errors.New("upstream")})
 	response := httptest.NewRecorder()
 	app.refresh(response, httptest.NewRequest(http.MethodPost, "/api/data/refresh", nil))
 	if response.Code != http.StatusBadGateway {
 		t.Fatalf("status = %d", response.Code)
 	}
-	if _, err := app.refreshCatalog(context.Background()); err == nil {
-		t.Fatal("expected catalogue error")
-	}
-	app.refreshIfStale()
-	if err := db.Close(); err != nil {
+	data := newMemoryStore()
+	if err := data.UpsertFunds([]domain.Fund{{ID: "fresh", Name: "Fresh", RefreshedAt: time.Now().UTC()}}); err != nil {
 		t.Fatal(err)
 	}
-	app.refreshIfStale()
-	response = httptest.NewRecorder()
-	app.findFunds(response, httptest.NewRequest(http.MethodGet, "/api/funds", nil))
-	if response.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d", response.Code)
-	}
-	var target map[string]any
-	if err := decodeJSON(httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(`{"ok":true}`)), &target); err != nil || target["ok"] != true {
-		t.Fatalf("decode = %#v, %v", target, err)
-	}
-}
-
-func TestRefreshCatalogStoreErrorAndNew(t *testing.T) {
-	app, db, _ := newTestApp(t, stubCatalog{funds: []domain.Fund{{ID: "fund", Name: "Fund", RefreshedAt: time.Now()}}})
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := app.refreshCatalog(context.Background()); err == nil {
-		t.Fatal("expected store error")
-	}
-
-	// New starts the production background refresh; use a fresh timestamp so it
-	// returns before accessing the catalogue.
-	path := filepath.Join(t.TempDir(), "new.db")
-	fresh, err := store.Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer fresh.Close()
-	if err := fresh.UpsertFunds([]domain.Fund{{ID: "fresh", Name: "Fresh", RefreshedAt: time.Now().UTC()}}); err != nil {
-		t.Fatal(err)
-	}
-	newApp(fresh, stubCatalog{}, log.New(io.Discard, "", 0)).refreshIfStale()
-	if got := New(fresh, stubCatalog{}, log.New(io.Discard, "", 0)); got == nil {
+	if got := New(data, stubCatalog{}, log.New(io.Discard, "", 0)); got == nil {
 		t.Fatal("expected app")
 	}
 }

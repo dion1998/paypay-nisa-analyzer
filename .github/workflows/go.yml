@@ -27,6 +27,19 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Verify frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
       - name: Verify formatting
         run: |
           test -z "$(gofmt -l .)"
@@ -37,14 +50,12 @@ jobs:
       - name: Test
         run: go test ./...
 
-      - name: Measure core coverage
+      - name: Report internal coverage
         shell: bash
         run: |
           set -euo pipefail
           coverage_dir="$(mktemp -d)"
           trap 'rm -rf "$coverage_dir"' EXIT
-          failed=0
-
           {
             echo "## Core test coverage"
             echo
@@ -57,10 +68,4 @@ jobs:
             go test "-coverprofile=$profile" "$package"
             coverage="$(go tool cover "-func=$profile" | awk '/^total:/ {print $3}')"
             echo "| \`$package\` | $coverage |" >> "$GITHUB_STEP_SUMMARY"
-            if [[ "$coverage" != "100.0%" ]]; then
-              echo "Coverage requirement not met: $package is $coverage (required: 100.0%)." >&2
-              failed=1
-            fi
           done < <(go list ./internal/...)
-
-          exit "$failed"

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -11,13 +12,13 @@ import (
 )
 
 func main() {
-	database := flag.String("db", "data/nisa-analyzer.db", "SQLite database path")
+	databaseURL := flag.String("database-url", os.Getenv("DATABASE_URL"), "PostgreSQL connection URL (or DATABASE_URL)")
 	fundID := flag.String("fund", "", "fund ID returned by /api/funds")
 	csvPath := flag.String("csv", "", "official adjusted NAV CSV path")
 	sourceURL := flag.String("source", "", "official source URL for this CSV")
 	flag.Parse()
-	if *fundID == "" || *csvPath == "" || *sourceURL == "" {
-		log.Fatal("必須提供 -fund、-csv、-source")
+	if *databaseURL == "" || *fundID == "" || *csvPath == "" || *sourceURL == "" {
+		log.Fatal("必須提供 DATABASE_URL（或 -database-url）、-fund、-csv、-source")
 	}
 	file, err := os.Open(*csvPath)
 	if err != nil {
@@ -28,7 +29,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	db, err := store.Open(*database)
+	db, err := store.OpenPostgres(context.Background(), *databaseURL)
 	if err != nil {
 		log.Fatal(err)
 	}

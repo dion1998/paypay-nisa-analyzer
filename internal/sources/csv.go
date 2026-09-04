@@ -11,9 +11,8 @@ import (
 	"paypay-nisa-analyzer/internal/domain"
 )
 
-// ParseAdjustedNAVCSV accepts a deliberately small, auditable interchange
-// format: date,adjusted_nav. adjusted_nav must be a NAV series that has already
-// reinvested pre-tax distributions. Plain NAV must not be imported as a proxy.
+// ParseAdjustedNAVCSV 僅接受容易稽核的 date,adjusted_nav 格式。adjusted_nav
+// 必須是已將稅前配息再投資的淨值序列，不能用一般淨值代替。
 func ParseAdjustedNAVCSV(r io.Reader, fundID, sourceURL string) ([]domain.PricePoint, error) {
 	reader := csv.NewReader(r)
 	reader.FieldsPerRecord = -1

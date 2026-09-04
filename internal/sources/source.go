@@ -18,9 +18,8 @@ type FundCatalogSource interface {
 	FetchFunds(context.Context) ([]domain.Fund, error)
 }
 
-// PayPayPublicSource fetches only PayPay's public catalogue JSON. It deliberately
-// does not use a logged-in browser session or private API. If the public schema
-// changes, Refresh returns an error and cached data stays intact.
+// PayPayPublicSource 僅取得 PayPay 公開的基金清單 JSON，不使用登入中的瀏覽器
+// 工作階段或私有 API。公開格式改變時，更新會回傳錯誤並保留既有快取資料。
 type PayPayPublicSource struct {
 	client   *http.Client
 	endpoint string
